@@ -33,7 +33,7 @@ import {haptics} from './utils/haptics';
 
 type ScreenMode = 'title' | 'lobby' | 'playing_solo' | 'playing_host' | 'playing_client' | 'podium';
 
-const TITLE_BANNER_SRC = '/src/assets/images/starhop_title_banner_1795198173521.jpg';
+const TITLE_BANNER_SRC = '/src/assets/images/peak_party_banner_1795236477551.jpg';
 
 export default function App() {
   const [screen, setScreen] = useState<ScreenMode>('title');
@@ -192,9 +192,16 @@ export default function App() {
             localPlayerIdRef.current = msg.playerId;
           } else if (msg.type === 'lobby_state' && msg.lobby) {
             const snap: LobbySnapshot = msg.lobby;
+            const myId =
+              typeof msg.yourPlayerId === 'string' && msg.yourPlayerId
+                ? msg.yourPlayerId
+                : localPlayerIdRef.current;
+            if (myId && myId !== localPlayerIdRef.current) {
+              localPlayerIdRef.current = myId;
+              setLocalPlayerId(myId);
+            }
             setLobby(snap);
             lobbyRef.current = snap;
-            const myId = localPlayerIdRef.current;
 
             // Automatically establish direct Local Wi-Fi / Hotspot WebRTC DataChannels!
             const mesh = ensurePeerMesh();
@@ -213,7 +220,14 @@ export default function App() {
             const mesh = ensurePeerMesh();
             void mesh.handleSignal(String(msg.fromId), msg.signal as PeerSignalPayload);
           } else if (msg.type === 'p2p_match_start') {
-            const myId = localPlayerIdRef.current;
+            const myId =
+              typeof msg.yourPlayerId === 'string' && msg.yourPlayerId
+                ? msg.yourPlayerId
+                : localPlayerIdRef.current;
+            if (myId && myId !== localPlayerIdRef.current) {
+              localPlayerIdRef.current = myId;
+              setLocalPlayerId(myId);
+            }
             remoteSnapshotRef.current = null;
             remoteGuestInputsRef.current = {};
             setMatchSummary(null);
@@ -306,7 +320,6 @@ export default function App() {
     haptics.victory();
     setErrorMsg(null);
     setWasMultiplayerMatch(false);
-    setLocalPlayerId('solo_p1');
     setMatchKey((k) => k + 1);
     setScreen('playing_solo');
   };
@@ -454,11 +467,11 @@ export default function App() {
             <section className="flex flex-col justify-center gap-3 sm:col-span-6 lg:col-span-7">
               <div className="max-w-lg">
                 <h1 className="font-display text-3xl font-bold leading-tight text-white [text-wrap:balance] sm:text-4xl lg:text-5xl">
-                  Jump, Puff &amp; Toss Bombs With Friends
+                  Climb, Double-Jump &amp; Toss Bombs With Friends
                 </h1>
                 <p className="mt-1.5 text-xs text-slate-200 sm:text-sm">
-                  Large multi-tier procedural worlds, cracked puzzle vaults, power-ups, and a Baron
-                  Cinder-Crown boss showdown — powered by direct local Wi-Fi / Hotspot P2P.
+                  Large multi-tier worlds, independent per-player cameras, cracked puzzle vaults,
+                  and a Baron Cinder-Crown boss showdown over direct local Wi-Fi P2P.
                 </p>
               </div>
 
@@ -499,16 +512,13 @@ export default function App() {
                           title={pal.label}
                           className={`arcade-btn flex h-8 w-8 items-center justify-center rounded-full border-2 ${
                             active
-                              ? 'scale-110 border-amber-300 ring-2 ring-amber-400/50'
-                              : 'border-slate-700 opacity-85 hover:opacity-100'
+                              ? 'scale-110 border-white ring-2 ring-amber-400/70'
+                              : 'border-slate-900/80 opacity-85 hover:opacity-100'
                           }`}
                           style={{backgroundColor: pal.body}}
                           aria-label={`Select ${pal.label}`}
                         >
-                          <span
-                            className="h-3 w-3 rounded-full border border-slate-900"
-                            style={{backgroundColor: pal.cap}}
-                          />
+                          {active && <span className="h-2.5 w-2.5 rounded-full bg-white shadow-sm" />}
                         </button>
                       );
                     })}
@@ -634,7 +644,7 @@ export default function App() {
                 ? 'p2p_host'
                 : 'client'
           }
-          localPlayerId={localPlayerId}
+          localPlayerId={screen === 'playing_solo' ? 'solo_p1' : localPlayerId}
           localName={playerName.trim() || 'Starhop'}
           localColor={playerColor}
           mode={screen === 'playing_solo' ? selectedMode : lobby?.mode ?? selectedMode}

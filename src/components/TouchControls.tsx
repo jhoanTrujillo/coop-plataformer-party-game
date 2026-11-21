@@ -153,11 +153,11 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               ? 'border-emerald-900 bg-emerald-500'
               : 'border-emerald-800 bg-gradient-to-b from-emerald-400 to-emerald-600'
           }`}
-          aria-label="Jump or puff double jump"
+          aria-label="Jump or double jump"
         >
           <ArrowUp className="h-7 w-7 stroke-[2.75]" />
           <span className="mt-0.5 text-[11px] leading-none whitespace-nowrap">
-            {canDoubleJump ? 'PUFF' : 'JUMP'}
+            {canDoubleJump ? 'HOP' : 'JUMP'}
           </span>
         </button>
       </div>

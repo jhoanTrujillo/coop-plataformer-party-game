@@ -1,19 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
   <defs>
-    <radialGradient id="sky" cx="50%" cy="50%" r="60%">
+    <radialGradient id="sky" cx="50%" cy="45%" r="65%">
       <stop offset="0%" stop-color="#38bdf8" />
-      <stop offset="100%" stop-color="#0284c7" />
+      <stop offset="100%" stop-color="#0369a1" />
     </radialGradient>
   </defs>
   <rect width="128" height="128" rx="28" fill="url(#sky)" />
-  <circle cx="64" cy="70" r="34" fill="#fb7185" stroke="#1e293b" stroke-width="6" />
-  <path d="M30 56 C32 30, 96 30, 98 56 Z" fill="#ef4444" stroke="#1e293b" stroke-width="6" />
-  <path d="M26 56 L102 56" stroke="#facc15" stroke-width="7" stroke-linecap="round" />
-  <ellipse cx="52" cy="68" rx="4.5" ry="7.5" fill="#0f172a" />
-  <ellipse cx="76" cy="68" rx="4.5" ry="7.5" fill="#0f172a" />
-  <circle cx="51" cy="65" r="2" fill="#ffffff" />
-  <circle cx="75" cy="65" r="2" fill="#ffffff" />
-  <ellipse cx="42" cy="76" rx="5" ry="3" fill="#f43f5e" opacity="0.7" />
-  <ellipse cx="86" cy="76" rx="5" ry="3" fill="#f43f5e" opacity="0.7" />
-  <polygon points="98,20 103,31 115,32 106,40 108,52 98,46 88,52 90,40 81,32 93,31" fill="#facc15" stroke="#1e293b" stroke-width="4" stroke-linejoin="round" />
+  <!-- Matching backpack -->
+  <rect x="27" y="64" width="18" height="30" rx="7" fill="#be123c" stroke="#0f172a" stroke-width="5.5" />
+  <!-- Simple rounded legs (solid coral skin) -->
+  <line x1="53" y1="88" x2="50" y2="108" stroke="#0f172a" stroke-width="21" stroke-linecap="round" />
+  <line x1="53" y1="88" x2="50" y2="108" stroke="#fb7185" stroke-width="11" stroke-linecap="round" />
+  <line x1="74" y1="88" x2="77" y2="108" stroke="#0f172a" stroke-width="21" stroke-linecap="round" />
+  <line x1="74" y1="88" x2="77" y2="108" stroke="#fb7185" stroke-width="11" stroke-linecap="round" />
+  <!-- Simple rounded arms (solid coral skin) -->
+  <line x1="44" y1="71" x2="29" y2="83" stroke="#0f172a" stroke-width="19" stroke-linecap="round" />
+  <line x1="44" y1="71" x2="29" y2="83" stroke="#fb7185" stroke-width="9.5" stroke-linecap="round" />
+  <line x1="84" y1="71" x2="98" y2="55" stroke="#0f172a" stroke-width="19" stroke-linecap="round" />
+  <line x1="84" y1="71" x2="98" y2="55" stroke="#fb7185" stroke-width="9.5" stroke-linecap="round" />
+  <!-- Smooth pill torso -->
+  <rect x="42" y="59" width="44" height="39" rx="19" fill="#fb7185" stroke="#0f172a" stroke-width="5.5" />
+  <!-- Smooth round head -->
+  <circle cx="64" cy="43" r="26" fill="#fb7185" stroke="#0f172a" stroke-width="5.5" />
+  <ellipse cx="55" cy="33" rx="10" ry="6" transform="rotate(-22 55 33)" fill="#fda4af" opacity="0.65" />
+  <!-- Cartoon white eyes -->
+  <ellipse cx="57" cy="43" rx="6.8" ry="8.2" fill="#ffffff" stroke="#0f172a" stroke-width="3.8" />
+  <ellipse cx="75" cy="43" rx="6.5" ry="8" fill="#ffffff" stroke="#0f172a" stroke-width="3.8" />
+  <circle cx="59" cy="43" r="3.4" fill="#0f172a" />
+  <circle cx="77" cy="43" r="3.2" fill="#0f172a" />
+  <circle cx="57.6" cy="40.5" r="1.5" fill="#ffffff" />
+  <circle cx="75.6" cy="40.5" r="1.5" fill="#ffffff" />
+  <!-- Smile -->
+  <path d="M62 55 Q67 60 72 55" fill="none" stroke="#0f172a" stroke-width="3.8" stroke-linecap="round" />
+  <!-- Floating golden star -->
+  <polygon points="103,20 107.5,30 118,31.2 110,38.5 112.2,49 103,43.8 93.8,49 96,38.5 88,31.2 98.5,30" fill="#facc15" stroke="#0f172a" stroke-width="3.8" stroke-linejoin="round" />
 </svg>

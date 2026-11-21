@@ -20,6 +20,14 @@ import {
   TILE_USED,
   WorldState,
 } from '../shared/types';
+import {
+  BOSS_FRAMES,
+  ENEMY_FRAMES,
+  PLAYER_FRAMES,
+  getBossSpriteSheet,
+  getEnemySpriteSheet,
+  getPlayerSpriteSheet,
+} from './spriteSheets';
 
 export interface Particle {
   x: number;
@@ -42,12 +50,38 @@ export interface FloatingText {
   maxLife: number;
 }
 
+/**
+ * Independent per-player camera instance attached strictly to one player ID.
+ * Each client owns its own PlayerCamera so players never lose their camera when the host moves away.
+ */
+export interface PlayerCamera {
+  ownerPlayerId: string;
+  x: number;
+  y: number;
+  lookAheadX: number;
+  initialized: boolean;
+  lastStageIndex: number;
+  lastAnchorX: number;
+  lastAnchorY: number;
+}
+
+export function createPlayerCamera(ownerPlayerId: string): PlayerCamera {
+  return {
+    ownerPlayerId,
+    x: 0,
+    y: 0,
+    lookAheadX: 0,
+    initialized: false,
+    lastStageIndex: -1,
+    lastAnchorX: 120,
+    lastAnchorY: 320,
+  };
+}
+
 export interface RenderFxState {
   particles: Particle[];
   texts: FloatingText[];
   shake: number;
-  camX: number;
-  camY: number;
 }
 
 export function createRenderFx(): RenderFxState {
@@ -55,8 +89,6 @@ export function createRenderFx(): RenderFxState {
     particles: [],
     texts: [],
     shake: 0,
-    camX: 0,
-    camY: 0,
   };
 }
 
@@ -96,7 +128,6 @@ export function spawnFxFromEvents(fx: RenderFxState, events: GameEvent[]) {
         break;
 
       case 'double_jump':
-        // Cute Kirby puff cloud burst!
         fx.particles.push({
           x: ev.x,
           y: ev.y,
@@ -108,17 +139,17 @@ export function spawnFxFromEvents(fx: RenderFxState, events: GameEvent[]) {
           maxLife: 0.28,
           kind: 'ring',
         });
-        for (let i = 0; i < 9; i++) {
-          const ang = (Math.PI * 2 * i) / 9;
+        for (let i = 0; i < 8; i++) {
+          const ang = (Math.PI * 2 * i) / 8;
           fx.particles.push({
             x: ev.x,
             y: ev.y,
-            vx: Math.cos(ang) * 95,
-            vy: Math.sin(ang) * 40 + 25,
-            size: 5 + Math.random() * 4,
-            color: i % 2 === 0 ? '#ffffff' : '#fef08a',
-            life: 0.34,
-            maxLife: 0.34,
+            vx: Math.cos(ang) * 90,
+            vy: Math.sin(ang) * 35 + 24,
+            size: 4.5 + Math.random() * 3.5,
+            color: i % 2 === 0 ? '#ffffff' : '#bae6fd',
+            life: 0.32,
+            maxLife: 0.32,
             kind: 'circle',
           });
         }
@@ -277,39 +308,71 @@ export function stepRenderFx(fx: RenderFxState, dt: number) {
   });
 }
 
-export function renderGameCanvas(
-  ctx: CanvasRenderingContext2D,
-  viewW: number,
-  viewH: number,
+function stepPlayerCamera(
+  camera: PlayerCamera,
   world: WorldState,
-  localPlayerId: string,
-  fx: RenderFxState,
-  timeSec: number,
+  visibleWorldW: number,
+  visibleWorldH: number,
+  dt: number,
 ) {
-  // Adaptive landscape virtual resolution: crisp 16-tile (512px) vertical camera window
-  // so characters stay large and vivid on mobile screens while panning smoothly X & Y across 20-22 tile tall worlds!
-  const worldPixelH = world.height * TILE_SIZE;
   const worldPixelW = world.width * TILE_SIZE;
-  const visibleWorldH = Math.min(worldPixelH, 16 * TILE_SIZE);
-  const scale = viewH / visibleWorldH;
-  const visibleWorldW = viewW / scale;
+  const worldPixelH = world.height * TILE_SIZE;
 
-  // Smooth camera tracking local player in both X and Y
-  const localP =
-    world.players.find((p) => p.id === localPlayerId) ??
-    world.players[0] ?? {x: 100, y: 300, w: 26, h: 28};
+  // Strictly bind to this client's own player ID (only fall back to players[0] in single-player)
+  const ownedPlayer =
+    world.players.find((p) => p.id === camera.ownerPlayerId) ??
+    (world.players.length === 1 ? world.players[0] : undefined);
 
-  let targetCamX = localP.x + localP.w / 2 - visibleWorldW * 0.44;
+  if (ownedPlayer) {
+    camera.lastAnchorX = ownedPlayer.x + ownedPlayer.w / 2;
+    camera.lastAnchorY = ownedPlayer.y + ownedPlayer.h / 2;
+    const desiredLookAhead = ownedPlayer.facing * 26;
+    const lookLerp = 1 - Math.exp(-6 * dt);
+    camera.lookAheadX += (desiredLookAhead - camera.lookAheadX) * lookLerp;
+  }
+
+  let targetCamX = camera.lastAnchorX + camera.lookAheadX - visibleWorldW * 0.5;
   if (worldPixelW <= visibleWorldW) {
     targetCamX = (worldPixelW - visibleWorldW) / 2;
   } else {
     targetCamX = Math.max(0, Math.min(worldPixelW - visibleWorldW, targetCamX));
   }
-  fx.camX += (targetCamX - fx.camX) * 0.16;
 
-  let targetCamY = localP.y + localP.h / 2 - visibleWorldH * 0.56;
-  targetCamY = Math.max(0, Math.min(worldPixelH - visibleWorldH, targetCamY));
-  fx.camY += (targetCamY - fx.camY) * 0.14;
+  let targetCamY = camera.lastAnchorY - visibleWorldH * 0.56;
+  targetCamY = Math.max(0, Math.min(Math.max(0, worldPixelH - visibleWorldH), targetCamY));
+
+  // Snap immediately on first frame or stage change so the camera never drifts across the map
+  const stageChanged = camera.lastStageIndex !== world.stageIndex;
+  if (!camera.initialized || stageChanged) {
+    camera.x = targetCamX;
+    camera.y = targetCamY;
+    camera.initialized = true;
+    camera.lastStageIndex = world.stageIndex;
+  } else {
+    const smoothX = 1 - Math.exp(-10.5 * dt);
+    const smoothY = 1 - Math.exp(-8.5 * dt);
+    camera.x += (targetCamX - camera.x) * smoothX;
+    camera.y += (targetCamY - camera.y) * smoothY;
+  }
+}
+
+export function renderGameCanvas(
+  ctx: CanvasRenderingContext2D,
+  viewW: number,
+  viewH: number,
+  world: WorldState,
+  camera: PlayerCamera,
+  fx: RenderFxState,
+  timeSec: number,
+  dt: number,
+) {
+  const worldPixelH = world.height * TILE_SIZE;
+  const visibleWorldH = Math.min(worldPixelH, 16 * TILE_SIZE);
+  const scale = viewH / visibleWorldH;
+  const visibleWorldW = viewW / scale;
+
+  // Update this player's dedicated independent camera instance
+  stepPlayerCamera(camera, world, visibleWorldW, visibleWorldH, dt);
 
   const shakeX = fx.shake > 0.2 ? (Math.random() - 0.5) * fx.shake : 0;
   const shakeY = fx.shake > 0.2 ? (Math.random() - 0.5) * fx.shake : 0;
@@ -317,17 +380,17 @@ export function renderGameCanvas(
   ctx.save();
   ctx.scale(scale, scale);
 
-  // 1. Layered Parallax Sky & Hills Backdrop
-  drawBackdrop(ctx, visibleWorldW, visibleWorldH, fx.camX, world.theme, timeSec);
+  // 1. Layered Parallax Sky & Terrain Backdrop
+  drawBackdrop(ctx, visibleWorldW, visibleWorldH, camera.x, world.theme, timeSec);
 
   ctx.save();
-  ctx.translate(-Math.round(fx.camX) + shakeX, -Math.round(fx.camY) + shakeY);
+  ctx.translate(-Math.round(camera.x) + shakeX, -Math.round(camera.y) + shakeY);
 
-  // 2. Visible Tiles (culled in both X and Y for crisp 60fps on mobile!)
-  const startTx = Math.max(0, Math.floor(fx.camX / TILE_SIZE) - 1);
-  const endTx = Math.min(world.width - 1, Math.ceil((fx.camX + visibleWorldW) / TILE_SIZE) + 1);
-  const startTy = Math.max(0, Math.floor(fx.camY / TILE_SIZE) - 1);
-  const endTy = Math.min(world.height - 1, Math.ceil((fx.camY + visibleWorldH) / TILE_SIZE) + 1);
+  // 2. Visible Tiles (culled in X & Y)
+  const startTx = Math.max(0, Math.floor(camera.x / TILE_SIZE) - 1);
+  const endTx = Math.min(world.width - 1, Math.ceil((camera.x + visibleWorldW) / TILE_SIZE) + 1);
+  const startTy = Math.max(0, Math.floor(camera.y / TILE_SIZE) - 1);
+  const endTy = Math.min(world.height - 1, Math.ceil((camera.y + visibleWorldH) / TILE_SIZE) + 1);
   for (let ty = startTy; ty <= endTy; ty++) {
     for (let tx = startTx; tx <= endTx; tx++) {
       const tile = world.tiles[ty * world.width + tx];
@@ -339,17 +402,17 @@ export function renderGameCanvas(
 
   // 3. Items (Coins, Stars, PowerUps, Crates, Bombs)
   for (const it of world.items) {
-    if (it.x + it.w < fx.camX - 48 || it.x > fx.camX + visibleWorldW + 48) continue;
+    if (it.x + it.w < camera.x - 48 || it.x > camera.x + visibleWorldW + 48) continue;
     drawItem(ctx, it, timeSec);
   }
 
-  // 4. Enemies
+  // 4. Enemies (rendered from revamped sprite sheets!)
   for (const en of world.enemies) {
-    if (en.x + en.w < fx.camX - 48 || en.x > fx.camX + visibleWorldW + 48) continue;
+    if (en.x + en.w < camera.x - 64 || en.x > camera.x + visibleWorldW + 64) continue;
     drawEnemy(ctx, en, timeSec);
   }
 
-  // 5. Boss
+  // 5. Boss (rendered from revamped boss sprite sheet!)
   if (world.boss) {
     drawBoss(ctx, world.boss, timeSec);
   }
@@ -359,9 +422,9 @@ export function renderGameCanvas(
     drawProjectile(ctx, pr, timeSec);
   }
 
-  // 7. Players
+  // 7. Players (rendered from PEAK-style single-color humanoid sprite sheets!)
   for (const p of world.players) {
-    drawPlayer(ctx, p, p.id === localPlayerId, world.players.length > 1, timeSec);
+    drawPlayer(ctx, p, p.id === camera.ownerPlayerId, world.players.length > 1, timeSec);
   }
 
   // 8. Particles & Floating Score Popups
@@ -407,7 +470,74 @@ export function renderGameCanvas(
   }
 
   ctx.restore();
+
+  // 9. Screen-edge directional markers for off-screen teammates (so players can explore freely!)
+  if (world.players.length > 1) {
+    drawOffscreenTeammateMarkers(ctx, world, camera, visibleWorldW, visibleWorldH);
+  }
+
   ctx.restore();
+}
+
+function drawOffscreenTeammateMarkers(
+  ctx: CanvasRenderingContext2D,
+  world: WorldState,
+  camera: PlayerCamera,
+  viewW: number,
+  viewH: number,
+) {
+  const pad = 22;
+  for (const p of world.players) {
+    if (p.id === camera.ownerPlayerId) continue;
+    const sx = p.x + p.w / 2 - camera.x;
+    const sy = p.y + p.h / 2 - camera.y;
+    if (sx >= 0 && sx <= viewW && sy >= 0 && sy <= viewH) continue;
+
+    const pal = CHARACTER_PALETTES[p.color] ?? CHARACTER_PALETTES.sakura;
+    const cx = viewW / 2;
+    const cy = viewH / 2;
+    const dx = sx - cx;
+    const dy = sy - cy;
+    const angle = Math.atan2(dy, dx);
+
+    const mx = Math.max(pad, Math.min(viewW - pad, sx));
+    const my = Math.max(54, Math.min(viewH - 42, sy));
+
+    ctx.save();
+    ctx.translate(mx, my);
+
+    // Directional chevron
+    ctx.save();
+    ctx.rotate(angle);
+    ctx.fillStyle = pal.body;
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(15, 0);
+    ctx.lineTo(6, -6);
+    ctx.lineTo(6, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // Solid color circular badge with initial
+    ctx.fillStyle = pal.body;
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.arc(0, 0, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#0f172a';
+    ctx.font = '700 10px "Fredoka", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText((p.name[0] || 'P').toUpperCase(), 0, 0.5);
+
+    ctx.restore();
+  }
 }
 
 function drawBackdrop(
@@ -435,20 +565,18 @@ function drawBackdrop(
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
 
-  // Twinkling stars or drifting clouds
   if (theme === 'ruins') {
     for (let i = 0; i < 28; i++) {
-      const sx = ((i * 97 - camX * 0.08) % (w + 60) + (w + 60)) % (w + 60) - 30;
+      const sx = (((i * 97 - camX * 0.08) % (w + 60)) + (w + 60)) % (w + 60) - 30;
       const sy = 24 + ((i * 53) % 240);
       const pulse = 0.5 + 0.5 * Math.sin(timeSec * 3 + i);
       ctx.fillStyle = `rgba(254, 240, 138, ${0.4 + pulse * 0.6})`;
       ctx.fillRect(sx, sy, 3, 3);
     }
   } else if (theme === 'citadel') {
-    // Rising glowing embers
     for (let i = 0; i < 22; i++) {
-      const ex = ((i * 83 - camX * 0.12) % (w + 40) + (w + 40)) % (w + 40) - 20;
-      const ey = (h - ((timeSec * 38 + i * 47) % h));
+      const ex = (((i * 83 - camX * 0.12) % (w + 40)) + (w + 40)) % (w + 40) - 20;
+      const ey = h - ((timeSec * 38 + i * 47) % h);
       ctx.fillStyle = i % 2 === 0 ? 'rgba(251, 146, 60, 0.7)' : 'rgba(250, 204, 21, 0.6)';
       ctx.beginPath();
       ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
@@ -456,10 +584,10 @@ function drawBackdrop(
     }
   }
 
-  // Fluffy stylized Kirby/Mario clouds (Meadow & Ruins)
+  // Stylized drifting clouds (Meadow & Ruins)
   if (theme !== 'citadel') {
-    const cloudColor = theme === 'meadow' ? 'rgba(255,255,255,0.92)' : 'rgba(224,231,255,0.32)';
-    const outline = theme === 'meadow' ? 'rgba(14,165,233,0.35)' : 'rgba(129,140,248,0.4)';
+    const cloudColor = theme === 'meadow' ? 'rgba(255,255,255,0.9)' : 'rgba(224,231,255,0.28)';
+    const outline = theme === 'meadow' ? 'rgba(14,165,233,0.32)' : 'rgba(129,140,248,0.35)';
     for (let i = 0; i < 8; i++) {
       const cx =
         (((i * 220 + timeSec * 8 - camX * 0.16) % (w + 260)) + (w + 260)) % (w + 260) - 130;
@@ -476,28 +604,33 @@ function drawBackdrop(
     }
   }
 
-  // Parallax hills / silhouettes
+  // Parallax mountain peaks & cliff silhouettes
   const hillStep = 240;
   const parallax = camX * 0.25;
   const startIdx = Math.floor(parallax / hillStep) - 1;
   for (let i = startIdx; i < startIdx + Math.ceil(w / hillStep) + 3; i++) {
     const hx = i * hillStep - parallax;
     if (theme === 'meadow') {
-      // Iconic Mario/Kirby domed emerald hills!
       ctx.fillStyle = i % 2 === 0 ? '#22c55e' : '#16a34a';
       ctx.strokeStyle = '#14532d';
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.ellipse(hx + 110, h - 10, 125, i % 2 === 0 ? 150 : 115, 0, Math.PI, 0);
+      ctx.moveTo(hx - 20, h);
+      ctx.lineTo(hx + 75, h - (i % 2 === 0 ? 175 : 135));
+      ctx.lineTo(hx + 145, h - (i % 2 === 0 ? 155 : 120));
+      ctx.lineTo(hx + 240, h);
+      ctx.closePath();
       ctx.fill();
       ctx.stroke();
-      // Cute oval highlights on hills
-      ctx.fillStyle = 'rgba(255,255,255,0.18)';
+      // Sunlit cliff ridge highlight
+      ctx.fillStyle = 'rgba(255,255,255,0.16)';
       ctx.beginPath();
-      ctx.ellipse(hx + 80, h - 75, 16, 24, 0, 0, Math.PI * 2);
+      ctx.moveTo(hx + 75, h - (i % 2 === 0 ? 175 : 135));
+      ctx.lineTo(hx + 108, h - (i % 2 === 0 ? 166 : 128));
+      ctx.lineTo(hx + 68, h - 45);
+      ctx.closePath();
       ctx.fill();
     } else if (theme === 'ruins') {
-      // Crystal spire silhouettes
       ctx.fillStyle = i % 2 === 0 ? 'rgba(67, 56, 202, 0.55)' : 'rgba(99, 102, 241, 0.42)';
       ctx.beginPath();
       ctx.moveTo(hx, h);
@@ -507,7 +640,6 @@ function drawBackdrop(
       ctx.closePath();
       ctx.fill();
     } else {
-      // Magma fortress battlements
       ctx.fillStyle = 'rgba(28, 25, 23, 0.65)';
       ctx.fillRect(hx + 10, h - 170, 90, 170);
       ctx.fillRect(hx + 25, h - 190, 20, 20);
@@ -536,7 +668,6 @@ function drawTile(
     if (theme === 'meadow') {
       ctx.fillStyle = checker ? '#b45309' : '#92400e';
       ctx.fillRect(x, y, s, s);
-      // Grass cap if exposed to air
       if (above === TILE_EMPTY || above === TILE_BOMB_SPAWNER || above === TILE_GOAL) {
         ctx.fillStyle = checker ? '#4ade80' : '#22c55e';
         ctx.fillRect(x, y, s, 10);
@@ -594,7 +725,6 @@ function drawTile(
   }
 
   if (tile === TILE_CRACKED) {
-    // Unmistakable bomb-destructible cracked stone wall!
     ctx.fillStyle = '#78716c';
     ctx.fillRect(x, y, s, s);
     ctx.fillStyle = '#a8a29e';
@@ -602,7 +732,6 @@ function drawTile(
     ctx.strokeStyle = '#1c1917';
     ctx.lineWidth = 2.5;
     ctx.strokeRect(x + 1, y + 1, s - 2, s - 2);
-    // Glowing amber fissures
     ctx.strokeStyle = '#f59e0b';
     ctx.lineWidth = 2.2;
     ctx.beginPath();
@@ -626,7 +755,6 @@ function drawTile(
     roundRect(ctx, x + 1, y + 1 + bounce, s - 2, s - 2, 5);
     ctx.fill();
     ctx.stroke();
-    // Rivets
     ctx.fillStyle = isQ ? '#b45309' : '#334155';
     ctx.fillRect(x + 4, y + 4 + bounce, 3, 3);
     ctx.fillRect(x + s - 7, y + 4 + bounce, 3, 3);
@@ -643,7 +771,6 @@ function drawTile(
   }
 
   if (tile === TILE_BOMB_SPAWNER) {
-    // Sleek glowing bomb dispenser pedestal
     const glow = 0.5 + 0.5 * Math.sin(timeSec * 5);
     ctx.fillStyle = '#334155';
     ctx.strokeStyle = '#0f172a';
@@ -653,7 +780,6 @@ function drawTile(
     ctx.stroke();
     ctx.fillStyle = `rgba(250, 204, 21, ${0.45 + glow * 0.55})`;
     ctx.fillRect(x + 6, y + 20, s - 12, 5);
-    // Tiny bomb icon badge on pedestal
     ctx.fillStyle = '#ef4444';
     ctx.beginPath();
     ctx.arc(x + s / 2, y + 13, 4, 0, Math.PI * 2);
@@ -662,7 +788,6 @@ function drawTile(
   }
 
   if (tile === TILE_HAZARD) {
-    // Crimson/orange spikes or bubbling lava
     const isLava = theme === 'citadel';
     if (isLava) {
       ctx.fillStyle = '#ea580c';
@@ -692,7 +817,6 @@ function drawTile(
   }
 
   if (tile === TILE_GOAL) {
-    // Glowing Kirby Warp Star inside Golden Mirror Arch!
     const pulse = 1 + Math.sin(timeSec * 6) * 0.1;
     ctx.save();
     ctx.translate(x + s / 2, y + s / 2);
@@ -733,12 +857,9 @@ function drawItem(ctx: CanvasRenderingContext2D, it: ItemEntity, timeSec: number
     const bob = Math.sin(it.bobPhase) * 4;
     ctx.save();
     ctx.translate(cx, cy + bob);
-    ctx.rotate(Math.sin(timeSec * 3) * 0.18);
+    ctx.rotate(Math.sin(timeSec * 3) * 0.16);
     drawMiniStar(ctx, 0, 0, 14, '#facc15', '#1e293b');
-    // Cute Kirby star eyes!
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(-3.5, -2.5, 2, 4.5);
-    ctx.fillRect(1.5, -2.5, 2, 4.5);
+    drawMiniStar(ctx, 0, 0, 6.5, '#fef9c3');
     ctx.restore();
     return;
   }
@@ -796,7 +917,7 @@ function drawItem(ctx: CanvasRenderingContext2D, it: ItemEntity, timeSec: number
     return;
   }
 
-  // Bomb & Mega Bomb!
+  // Bomb & Mega Bomb
   const isMega = it.kind === 'mega_bomb';
   const r = isMega ? 14 : 11;
   const urgentFlash = it.fuse > 0 && it.fuse < 1.0 && Math.floor(timeSec * 16) % 2 === 0;
@@ -810,14 +931,18 @@ function drawItem(ctx: CanvasRenderingContext2D, it: ItemEntity, timeSec: number
   ctx.fill();
   ctx.stroke();
 
-  // Glossy highlight & cute Bob-omb eyes
+  // Metallic gloss & band
   ctx.fillStyle = 'rgba(255,255,255,0.28)';
   ctx.beginPath();
   ctx.arc(-r * 0.35, -r * 0.25, r * 0.28, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(-4, -2, 2.5, 5);
-  ctx.fillRect(1.5, -2, 2.5, 5);
+  if (isMega) {
+    ctx.strokeStyle = '#facc15';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 1, r * 0.55, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
   // Fuse cap + burning spark
   ctx.fillStyle = '#94a3b8';
@@ -843,122 +968,54 @@ function drawEnemy(ctx: CanvasRenderingContext2D, en: EnemyEntity, timeSec: numb
   const cx = en.x + en.w / 2;
   const cy = en.y + en.h / 2;
   const stunned = en.stunnedTimer > 0;
+  const atlas = getEnemySpriteSheet(en.kind);
+
+  let frame: number = ENEMY_FRAMES.WALK_0;
+  if (stunned) {
+    frame = ENEMY_FRAMES.STUNNED;
+  } else if (en.kind === 'hopper') {
+    if (en.vy < -40) frame = ENEMY_FRAMES.ACTION;
+    else frame = Math.floor(timeSec * 7 + en.x * 0.05) % 2 === 0 ? ENEMY_FRAMES.WALK_0 : ENEMY_FRAMES.WALK_1;
+  } else if (en.kind === 'shellback') {
+    frame = Math.floor(timeSec * 8 + en.x * 0.06) % 2 === 0 ? ENEMY_FRAMES.WALK_0 : ENEMY_FRAMES.WALK_1;
+  } else if (en.kind === 'swooper') {
+    const cycle = [ENEMY_FRAMES.WALK_0, ENEMY_FRAMES.WALK_1, ENEMY_FRAMES.ACTION, ENEMY_FRAMES.WALK_1];
+    frame = cycle[Math.floor(timeSec * 10 + en.baseY * 0.05) % cycle.length];
+  } else {
+    // Ember Mortar-Bot: idle -> charge glow -> fire recoil
+    if (en.aiTimer < 0.25) frame = ENEMY_FRAMES.ACTION;
+    else if (en.aiTimer < 0.75) frame = ENEMY_FRAMES.WALK_1;
+    else frame = ENEMY_FRAMES.WALK_0;
+  }
+
+  const drawSize = 44;
 
   ctx.save();
-  ctx.translate(cx, cy);
-  if (stunned) ctx.scale(1, -1);
-  else ctx.scale(en.facing, 1);
+  ctx.translate(cx, cy - 2);
+  ctx.scale(en.facing, 1);
 
   if (en.hitFlash > 0) {
-    ctx.filter = 'brightness(2)';
+    ctx.filter = 'brightness(2.1)';
   }
 
-  if (en.kind === 'hopper') {
-    // Waddle Hopper (Kirby Waddle Dee meets Mario Goomba!)
-    const step = Math.sin(timeSec * 10) * 2.5;
-    ctx.fillStyle = '#ea580c';
-    ctx.strokeStyle = '#0f172a';
-    ctx.lineWidth = 2.4;
-    ctx.beginPath();
-    ctx.arc(0, 0, 13, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    // Tan face patch
-    ctx.fillStyle = '#fed7aa';
-    ctx.beginPath();
-    ctx.ellipse(2, 1, 8, 7, 0, 0, Math.PI * 2);
-    ctx.fill();
-    // Eyes
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(1, -3, 2.5, 5.5);
-    ctx.fillRect(6, -3, 2.5, 5.5);
-    // Feet
-    ctx.fillStyle = '#facc15';
-    ctx.beginPath();
-    ctx.ellipse(-5, 11 + step * 0.5, 5, 3.5, 0, 0, Math.PI * 2);
-    ctx.ellipse(5, 11 - step * 0.5, 5, 3.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  } else if (en.kind === 'shellback') {
-    // Spiny Armored Shellback (cannot stomp — clearly shows sharp white spikes!)
-    ctx.fillStyle = '#dc2626';
-    ctx.strokeStyle = '#0f172a';
-    ctx.lineWidth = 2.4;
-    ctx.beginPath();
-    ctx.arc(0, 3, 14, Math.PI, 0);
-    ctx.lineTo(14, 11);
-    ctx.lineTo(-14, 11);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    // White spikes along top shell
-    ctx.fillStyle = '#f8fafc';
-    for (const sx of [-8, 0, 8]) {
-      ctx.beginPath();
-      ctx.moveTo(sx - 4, -7);
-      ctx.lineTo(sx, -16);
-      ctx.lineTo(sx + 4, -7);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    }
-    // Fierce eyes
-    ctx.fillStyle = '#fef08a';
-    ctx.fillRect(4, 1, 6, 4);
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(7, 2, 2.5, 3);
-  } else if (en.kind === 'swooper') {
-    // Winged Sky Swooper
-    const flap = Math.sin(timeSec * 16) * 8;
-    ctx.fillStyle = '#7c3aed';
-    ctx.strokeStyle = '#0f172a';
-    ctx.lineWidth = 2.2;
-    // Wings
-    ctx.beginPath();
-    ctx.moveTo(-6, 0);
-    ctx.lineTo(-20, -8 + flap);
-    ctx.lineTo(-14, 6);
-    ctx.closePath();
-    ctx.moveTo(6, 0);
-    ctx.lineTo(20, -8 + flap);
-    ctx.lineTo(14, 6);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    // Body
-    ctx.fillStyle = '#a855f7';
-    ctx.beginPath();
-    ctx.arc(0, 0, 11, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#fef08a';
-    ctx.fillRect(2, -3, 3, 4);
-    ctx.fillRect(-4, -3, 3, 4);
-  } else {
-    // Flame Turret Chomper
-    ctx.fillStyle = '#334155';
-    ctx.strokeStyle = '#0f172a';
-    ctx.lineWidth = 2.4;
-    roundRect(ctx, -13, -12, 26, 26, 7);
-    ctx.fill();
-    ctx.stroke();
-    // Glowing cannon mouth
-    ctx.fillStyle = '#f97316';
-    ctx.beginPath();
-    ctx.arc(10, -2, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#fef08a';
-    ctx.fillRect(-4, -6, 4, 4);
-  }
-
+  ctx.drawImage(
+    atlas.canvas,
+    frame * atlas.frameWidth,
+    0,
+    atlas.frameWidth,
+    atlas.frameHeight,
+    -drawSize / 2,
+    -drawSize / 2,
+    drawSize,
+    drawSize,
+  );
   ctx.restore();
 
-  // Spinning dizzy stars when stunned so player knows they can GRAB it!
+  // Orbiting dizzy stars when stunned so player knows they can GRAB & THROW it!
   if (stunned) {
     for (let i = 0; i < 2; i++) {
       const ang = timeSec * 6 + i * Math.PI;
-      drawMiniStar(ctx, cx + Math.cos(ang) * 12, en.y - 6, 4.5, '#facc15');
+      drawMiniStar(ctx, cx + Math.cos(ang) * 13, en.y - 6, 4.5, '#facc15', '#0f172a');
     }
   }
 }
@@ -966,100 +1023,54 @@ function drawEnemy(ctx: CanvasRenderingContext2D, en: EnemyEntity, timeSec: numb
 function drawBoss(ctx: CanvasRenderingContext2D, b: BossEntity, timeSec: number) {
   const cx = b.x + b.w / 2;
   const cy = b.y + b.h / 2;
-  const squash = b.action === 'telegraph_slam' ? 1.18 : 1.0;
-  const stretch = b.action === 'telegraph_slam' ? 0.84 : 1.0;
+  const atlas = getBossSpriteSheet(b.phase);
+
+  let frame: number = BOSS_FRAMES.PATROL;
+  if (b.action === 'dizzy' || b.action === 'defeated') {
+    frame = BOSS_FRAMES.DIZZY;
+  } else if (b.action === 'telegraph_slam') {
+    frame = BOSS_FRAMES.TELEGRAPH;
+  } else if (b.action === 'slam' || b.action === 'fire_barrage' || b.action === 'charge') {
+    frame = BOSS_FRAMES.ATTACK;
+  }
+
+  const drawSize = 112;
+  const walkBob = b.action === 'patrol' ? Math.sin(timeSec * 8) * 2.5 : 0;
 
   ctx.save();
-  ctx.translate(cx, cy);
-  ctx.scale(b.facing * squash, stretch);
+  ctx.translate(cx, cy - 6 + walkBob);
 
+  // Phase 2 molten fury aura
+  if (b.phase === 2 && b.action !== 'defeated') {
+    ctx.fillStyle = `rgba(239, 68, 68, ${0.22 + Math.sin(timeSec * 14) * 0.1})`;
+    ctx.beginPath();
+    ctx.arc(0, 4, 52, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.scale(b.facing, 1);
   if (b.hitFlash > 0) {
     ctx.filter = 'brightness(2.2)';
   }
 
-  // Phase 2 fiery aura
-  if (b.phase === 2 && b.action !== 'defeated') {
-    ctx.fillStyle = `rgba(239, 68, 68, ${0.24 + Math.sin(timeSec * 14) * 0.1})`;
-    ctx.beginPath();
-    ctx.arc(0, 0, 48, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Cape
-  ctx.fillStyle = '#991b1b';
-  ctx.strokeStyle = '#0f172a';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(-26, -12);
-  ctx.lineTo(-42, 32);
-  ctx.lineTo(-10, 32);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Armored round boss torso (King Dedede + Bowser mashup!)
-  ctx.fillStyle = b.phase === 2 ? '#b91c1c' : '#475569';
-  ctx.beginPath();
-  ctx.arc(0, 4, 34, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  // Golden armored belly plate
-  ctx.fillStyle = '#fbbf24';
-  ctx.beginPath();
-  ctx.ellipse(6, 12, 20, 18, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  // Golden Crown!
-  ctx.fillStyle = '#facc15';
-  ctx.beginPath();
-  ctx.moveTo(-18, -26);
-  ctx.lineTo(-22, -44);
-  ctx.lineTo(-8, -33);
-  ctx.lineTo(0, -48);
-  ctx.lineTo(8, -33);
-  ctx.lineTo(22, -44);
-  ctx.lineTo(18, -26);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Expressive Eyes
-  if (b.action === 'dizzy' || b.action === 'defeated') {
-    ctx.strokeStyle = '#fef08a';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(2, -14);
-    ctx.lineTo(12, -4);
-    ctx.moveTo(12, -14);
-    ctx.lineTo(2, -4);
-    ctx.stroke();
-  } else {
-    ctx.fillStyle = '#fef08a';
-    ctx.beginPath();
-    ctx.ellipse(10, -8, 7, 6, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#dc2626';
-    ctx.beginPath();
-    ctx.arc(12, -8, 3, 0, Math.PI * 2);
-    ctx.fill();
-    // Angry brow
-    ctx.strokeStyle = '#0f172a';
-    ctx.lineWidth = 3.5;
-    ctx.beginPath();
-    ctx.moveTo(2, -17);
-    ctx.lineTo(18, -12);
-    ctx.stroke();
-  }
-
+  ctx.drawImage(
+    atlas.canvas,
+    frame * atlas.frameWidth,
+    0,
+    atlas.frameWidth,
+    atlas.frameHeight,
+    -drawSize / 2,
+    -drawSize / 2,
+    drawSize,
+    drawSize,
+  );
   ctx.restore();
 
-  // Dizzy orbit stars when stunned (signals "STOMP OR BOMB NOW!")
+  // Dizzy orbit stars when stunned ("STOMP OR BOMB NOW!")
   if (b.action === 'dizzy') {
     for (let i = 0; i < 3; i++) {
       const ang = timeSec * 5 + (i * Math.PI * 2) / 3;
-      drawMiniStar(ctx, cx + Math.cos(ang) * 28, b.y - 12 + Math.sin(ang) * 6, 7, '#facc15', '#0f172a');
+      drawMiniStar(ctx, cx + Math.cos(ang) * 30, b.y - 14 + Math.sin(ang) * 6, 7, '#facc15', '#0f172a');
     }
   }
 }
@@ -1097,16 +1108,35 @@ function drawPlayer(
   showName: boolean,
   timeSec: number,
 ) {
-  const pal = CHARACTER_PALETTES[p.color] ?? CHARACTER_PALETTES.sakura;
   const cx = p.x + p.w / 2;
   const cy = p.y + p.h / 2;
+  const atlas = getPlayerSpriteSheet(p.color);
 
-  // Invulnerability blink
-  if (p.invulnTimer > 0 && Math.floor(timeSec * 16) % 2 === 0 && !p.inBubble) {
-    ctx.save();
-    ctx.globalAlpha = 0.45;
+  // Select sprite-sheet frame cleanly from player state
+  let frame: number = PLAYER_FRAMES.IDLE_0;
+  if (p.heldItemId) {
+    frame = PLAYER_FRAMES.CARRY;
+  } else if (p.anim === 'puff') {
+    frame = PLAYER_FRAMES.DOUBLE_JUMP;
+  } else if (p.anim === 'jump' || p.anim === 'fall') {
+    frame = PLAYER_FRAMES.JUMP;
+  } else if (p.anim === 'run') {
+    const runCycle = [
+      PLAYER_FRAMES.RUN_0,
+      PLAYER_FRAMES.RUN_1,
+      PLAYER_FRAMES.RUN_2,
+      PLAYER_FRAMES.RUN_1,
+    ];
+    frame = runCycle[Math.floor(timeSec * 12) % runCycle.length];
   } else {
-    ctx.save();
+    // Gentle idle blink/breathe cycle
+    const idleCycle = Math.floor(timeSec * 1.4 + p.x * 0.01) % 6;
+    frame = idleCycle === 5 ? PLAYER_FRAMES.IDLE_1 : PLAYER_FRAMES.IDLE_0;
+  }
+
+  ctx.save();
+  if (p.invulnTimer > 0 && Math.floor(timeSec * 16) % 2 === 0 && !p.inBubble) {
+    ctx.globalAlpha = 0.45;
   }
 
   // Co-op Rescue Bubble
@@ -1115,150 +1145,81 @@ function drawPlayer(
     ctx.strokeStyle = '#e0f2fe';
     ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.arc(cx, cy, 22, 0, Math.PI * 2);
+    ctx.arc(cx, cy - 2, 24, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
   }
 
-  // Star Shield aura
+  // Power-up visual auras
   if (p.powerUp === 'star_shield') {
     const ang = timeSec * 4.5;
-    ctx.strokeStyle = 'rgba(192, 132, 252, 0.7)';
+    ctx.strokeStyle = 'rgba(192, 132, 252, 0.75)';
     ctx.lineWidth = 2.2;
     ctx.beginPath();
-    ctx.arc(cx, cy, 20, 0, Math.PI * 2);
+    ctx.arc(cx, cy - 2, 22, 0, Math.PI * 2);
     ctx.stroke();
-    drawMiniStar(ctx, cx + Math.cos(ang) * 20, cy + Math.sin(ang) * 20, 5, '#fef08a');
+    drawMiniStar(ctx, cx + Math.cos(ang) * 22, cy - 2 + Math.sin(ang) * 22, 5, '#fef08a');
   } else if (p.powerUp === 'gold_magnet') {
-    ctx.strokeStyle = 'rgba(250, 204, 21, 0.45)';
+    ctx.strokeStyle = 'rgba(250, 204, 21, 0.48)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(cx, cy, 22 + Math.sin(timeSec * 8) * 3, 0, Math.PI * 2);
+    ctx.arc(cx, cy - 2, 24 + Math.sin(timeSec * 8) * 3, 0, Math.PI * 2);
     ctx.stroke();
   }
 
-  ctx.translate(cx, cy);
-
-  // Squash & stretch for Kirby-like juice!
-  let sx = p.facing;
-  let sy = 1;
+  // Subtle squash/stretch + stride bob when carrying while running
+  const carryBob = p.heldItemId && p.anim === 'run' ? Math.sin(timeSec * 18) * 1.8 : 0;
+  let scaleX = p.facing;
+  let scaleY = 1;
   if (p.anim === 'puff') {
-    sx = p.facing * 1.18;
-    sy = 1.12;
+    scaleX = p.facing * 1.08;
+    scaleY = 1.06;
   } else if (p.anim === 'jump') {
-    sx = p.facing * 0.9;
-    sy = 1.12;
-  } else if (p.anim === 'run') {
-    const bob = Math.sin(timeSec * 18) * 0.06;
-    sx = p.facing * (1 + bob);
-    sy = 1 - bob;
+    scaleX = p.facing * 0.94;
+    scaleY = 1.07;
   }
-  ctx.scale(sx, sy);
 
-  // Winged Cap little fluttering wings!
+  ctx.translate(cx, cy - 4 + carryBob);
+  ctx.scale(scaleX, scaleY);
+
+  // Winged Boost power-up fluttering mini-wings on backpack
   if (p.powerUp === 'wing_cap') {
     const wFlap = Math.sin(timeSec * 20) * 4;
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#0f172a';
     ctx.lineWidth = 1.8;
     ctx.beginPath();
-    ctx.ellipse(-12, -8 + wFlap * 0.4, 7, 4, -0.4, 0, Math.PI * 2);
+    ctx.ellipse(-12, -4 + wFlap * 0.4, 7, 4, -0.35, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
   }
 
-  // Animated shoes
-  const footSwing = p.anim === 'run' ? Math.sin(timeSec * 20) * 5 : 0;
-  ctx.fillStyle = pal.shoe;
-  ctx.strokeStyle = '#0f172a';
-  ctx.lineWidth = 2.2;
-  ctx.beginPath();
-  ctx.ellipse(-5 + footSwing, 12, 6, 4, 0, 0, Math.PI * 2);
-  ctx.ellipse(5 - footSwing, 12, 6, 4, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  // Round Kirby-style body
-  ctx.fillStyle = pal.body;
-  ctx.beginPath();
-  ctx.arc(0, 1, 13, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  // Soft inner highlight
-  ctx.fillStyle = pal.bodyLight;
-  ctx.beginPath();
-  ctx.arc(-3, -2, 6.5, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Expressive arms (raised up when holding an item!)
-  const armsUp = Boolean(p.heldItemId);
-  ctx.fillStyle = pal.body;
-  ctx.beginPath();
-  ctx.ellipse(-11, armsUp ? -8 : 2, 4.5, 3.5, armsUp ? -0.7 : 0.3, 0, Math.PI * 2);
-  ctx.ellipse(11, armsUp ? -8 : 2, 4.5, 3.5, armsUp ? 0.7 : -0.3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  // Iconic Mario-inspired adventure cap on top!
-  ctx.fillStyle = pal.cap;
-  ctx.beginPath();
-  ctx.arc(0, -4, 13.5, Math.PI * 1.05, Math.PI * -0.05);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  // Cap brim & golden band
-  ctx.fillStyle = pal.cap;
-  ctx.beginPath();
-  ctx.ellipse(7, -5, 8, 3, 0.08, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-  ctx.strokeStyle = pal.trim;
-  ctx.lineWidth = 2.4;
-  ctx.beginPath();
-  ctx.moveTo(-11, -5.5);
-  ctx.lineTo(10, -5.5);
-  ctx.stroke();
-
-  // Rosy cheeks & sparkling Kirby eyes!
-  ctx.fillStyle = pal.cheek;
-  ctx.beginPath();
-  ctx.ellipse(-3, 4.5, 3, 1.8, 0, 0, Math.PI * 2);
-  ctx.ellipse(8.5, 4.5, 3, 1.8, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = '#0f172a';
-  ctx.beginPath();
-  ctx.ellipse(1, 0.5, 2, 3.8, 0, 0, Math.PI * 2);
-  ctx.ellipse(6.5, 0.5, 2, 3.8, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0.2, -2, 1.5, 2);
-  ctx.fillRect(5.7, -2, 1.5, 2);
-
-  // Cute mouth (puffed circle during double jump!)
-  if (p.anim === 'puff') {
-    ctx.fillStyle = '#0f172a';
-    ctx.beginPath();
-    ctx.arc(4, 6, 2.2, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  const drawSize = 44;
+  ctx.drawImage(
+    atlas.canvas,
+    frame * atlas.frameWidth,
+    0,
+    atlas.frameWidth,
+    atlas.frameHeight,
+    -drawSize / 2,
+    -drawSize / 2,
+    drawSize,
+    drawSize,
+  );
 
   ctx.restore();
 
-  // Player nameplate in multiplayer (or small gold pointer arrow for local player)
-  if (showName || isLocal) {
+  // Player nameplate in multiplayer
+  if (showName) {
     ctx.save();
     ctx.font = '700 10px "Plus Jakarta Sans", sans-serif';
     ctx.textAlign = 'center';
-    const labelY = p.y - (p.heldItemId ? 38 : 16);
-    if (showName) {
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = 'rgba(15,23,42,0.85)';
-      ctx.strokeText(p.name, cx, labelY);
-      ctx.fillStyle = isLocal ? '#facc15' : '#f8fafc';
-      ctx.fillText(p.name, cx, labelY);
-    }
+    const labelY = p.y - (p.heldItemId ? 42 : 20);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(15,23,42,0.88)';
+    ctx.strokeText(p.name, cx, labelY);
+    ctx.fillStyle = isLocal ? '#facc15' : '#f8fafc';
+    ctx.fillText(p.name, cx, labelY);
     ctx.restore();
   }
 }

@@ -114,7 +114,7 @@ function getLobbySnapshot(room: Room): LobbySnapshot {
 function broadcastLobby(room: Room) {
   const snapshot = getLobbySnapshot(room);
   for (const c of room.clients.values()) {
-    sendJson(c.ws, {type: 'lobby_state', lobby: snapshot});
+    sendJson(c.ws, {type: 'lobby_state', lobby: snapshot, yourPlayerId: c.id});
   }
 }
 
@@ -437,7 +437,7 @@ function handleClientMessage(client: ConnectedClient, msg: Record<string, unknow
       color: c.color,
       isHost: c.id === room.hostId,
     }));
-    const payload = {
+    const basePayload = {
       type: 'p2p_match_start',
       roomCode: room.code,
       mode: room.mode,
@@ -446,7 +446,7 @@ function handleClientMessage(client: ConnectedClient, msg: Record<string, unknow
       roster,
     };
     for (const c of room.clients.values()) {
-      sendJson(c.ws, payload);
+      sendJson(c.ws, {...basePayload, yourPlayerId: c.id});
     }
     return;
   }

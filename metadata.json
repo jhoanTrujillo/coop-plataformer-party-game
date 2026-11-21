@@ -1,6 +1,6 @@
 {
   "name": "Starhop Party",
-  "description": "A landscape 2D multiplayer platformer party game inspired by Kirby & the Amazing Mirror and Mario Party, featuring double-jump and grab/throw bomb physics, procedural 3-stage runs with boss battles, QR-code lobbies, adaptive chiptune music, and full-screen Android PWA support.",
+  "description": "A landscape 2D multiplayer platformer party game with independent per-player cameras, single-color humanoid and revamped enemy sprite sheets, double-jump and bomb-throwing physics, large procedural worlds, boss battles, QR-code lobbies, and full-screen PWA support.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

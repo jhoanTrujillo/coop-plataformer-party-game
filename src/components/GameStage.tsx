@@ -1,6 +1,7 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {soundEngine} from '../audio/soundEngine';
 import {
+  createPlayerCamera,
   createRenderFx,
   renderGameCanvas,
   spawnFxFromEvents,
@@ -60,6 +61,7 @@ export const GameStage: React.FC<GameStageProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fxRef = useRef(createRenderFx());
+  const cameraRef = useRef(createPlayerCamera(localPlayerId));
   const worldRef = useRef<WorldState | null>(null);
   const inputRef = useRef<PlayerInput>({...EMPTY_INPUT});
   const lastProcessedTickRef = useRef<number>(-1);
@@ -73,6 +75,13 @@ export const GameStage: React.FC<GameStageProps> = ({
     return 'ontouchstart' in window || navigator.maxTouchPoints > 0 || window.innerWidth < 960;
   });
 
+  // Always keep this client's camera instance locked strictly to this player's ID
+  useEffect(() => {
+    if (cameraRef.current.ownerPlayerId !== localPlayerId) {
+      cameraRef.current = createPlayerCamera(localPlayerId);
+    }
+  }, [localPlayerId]);
+
   // Initialize local authoritative world for 'solo' OR 'p2p_host'
   useEffect(() => {
     if (role === 'client') {
@@ -80,6 +89,7 @@ export const GameStage: React.FC<GameStageProps> = ({
       lastProcessedTickRef.current = -1;
       finishSubmittedRef.current = false;
       fxRef.current = createRenderFx();
+      cameraRef.current = createPlayerCamera(localPlayerId);
       return;
     }
 
@@ -97,6 +107,7 @@ export const GameStage: React.FC<GameStageProps> = ({
     worldRef.current = initial;
     finishSubmittedRef.current = false;
     fxRef.current = createRenderFx();
+    cameraRef.current = createPlayerCamera(localPlayerId);
     setHudWorld({...initial});
   }, [role, p2pHostConfig, localPlayerId, localName, localColor, mode]);
 
@@ -414,7 +425,7 @@ export const GameStage: React.FC<GameStageProps> = ({
           if (ctx) {
             ctx.save();
             ctx.scale(dpr, dpr);
-            renderGameCanvas(ctx, cw, ch, world, localPlayerId, fxRef.current, now / 1000);
+            renderGameCanvas(ctx, cw, ch, world, cameraRef.current, fxRef.current, now / 1000, dt);
             ctx.restore();
           }
         }
@@ -496,7 +507,7 @@ export const GameStage: React.FC<GameStageProps> = ({
         <div className="pointer-events-none fixed bottom-2.5 left-1/2 z-20 hidden -translate-x-1/2 items-center gap-3 rounded-xl border border-white/10 bg-slate-950/65 px-3.5 py-1.5 text-[11px] font-medium text-slate-300 backdrop-blur-md sm:flex">
           <span>Move: A / D or Arrows</span>
           <span aria-hidden="true">·</span>
-          <span>Jump / Mini Puff: Space</span>
+          <span>Jump / Double-Jump: Space</span>
           <span aria-hidden="true">·</span>
           <span>Grab / Throw Bombs: E or Shift</span>
         </div>

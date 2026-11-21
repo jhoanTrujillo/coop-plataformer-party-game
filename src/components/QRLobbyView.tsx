@@ -211,27 +211,24 @@ export const QRLobbyView: React.FC<QRLobbyViewProps> = ({
                 const pal = CHARACTER_PALETTES[c];
                 const selected = me?.color === c;
                 return (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => {
-                      haptics.tap();
-                      onChangeColor(c);
-                    }}
-                    title={pal.label}
-                    className={`arcade-btn flex h-9 w-9 items-center justify-center rounded-full border-2 transition-transform ${
-                      selected
-                        ? 'scale-110 border-amber-300 ring-2 ring-amber-400/50'
-                        : 'border-slate-700 opacity-80 hover:opacity-100'
-                    }`}
-                    style={{backgroundColor: pal.body}}
-                    aria-label={`Pick ${pal.label}`}
-                  >
-                    <span
-                      className="h-3.5 w-3.5 rounded-full border border-slate-900"
-                      style={{backgroundColor: pal.cap}}
-                    />
-                  </button>
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => {
+                        haptics.tap();
+                        onChangeColor(c);
+                      }}
+                      title={pal.label}
+                      className={`arcade-btn flex h-9 w-9 items-center justify-center rounded-full border-2 transition-transform ${
+                        selected
+                          ? 'scale-110 border-white ring-2 ring-amber-400/70'
+                          : 'border-slate-900/80 opacity-85 hover:opacity-100'
+                      }`}
+                      style={{backgroundColor: pal.body}}
+                      aria-label={`Pick ${pal.label}`}
+                    >
+                      {selected && <span className="h-2.5 w-2.5 rounded-full bg-white shadow-sm" />}
+                    </button>
                 );
               })}
             </div>
